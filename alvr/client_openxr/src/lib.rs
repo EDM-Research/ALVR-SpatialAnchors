@@ -166,6 +166,7 @@ pub fn entry_point() {
     }
     exts.khr_convert_timespec_time = true;
     exts.khr_opengl_es_enable = true;
+    exts.fb_spatial_entity = available_extensions.fb_spatial_entity;
     exts.other = available_extensions
         .other
         .into_iter()

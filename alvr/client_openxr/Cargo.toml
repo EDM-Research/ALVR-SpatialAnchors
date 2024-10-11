@@ -114,6 +114,8 @@ name = "com.oculus.permission.HAND_TRACKING"
 [[package.metadata.android.uses_permission]]
 name = "com.oculus.permission.BODY_TRACKING"
 [[package.metadata.android.uses_permission]]
+name = "com.oculus.permission.USE_ANCHOR_API"
+[[package.metadata.android.uses_permission]]
 name = "com.oculus.permission.WIFI_LOCK"
 [[package.metadata.android.application.meta_data]]
 name = "com.oculus.intent.category.VR"

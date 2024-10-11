@@ -18,7 +18,7 @@ use alvr_session::{
     BodyTrackingSourcesConfig, ClientsideFoveationConfig, ClientsideFoveationMode, EncoderConfig,
     FaceTrackingSourcesConfig, FoveatedEncodingConfig,
 };
-use openxr as xr;
+use openxr::{self as xr, sys, ViewConfigurationType};
 use std::{
     rc::Rc,
     sync::Arc,
@@ -506,6 +506,66 @@ fn stream_input_loop(
             interaction::update_buttons(&xr_ctx.session, &interaction_ctx.button_actions);
         if !button_entries.is_empty() {
             core_ctx.send_buttons(button_entries);
+
+            let xr_session = &xr_ctx.session;
+            let view = xr_session.locate_views(
+                ViewConfigurationType::PRIMARY_STEREO, tracker_time, &&interaction::get_reference_space(xr_session, xr::ReferenceSpaceType::LOCAL))
+                .unwrap().1[0];
+
+            pub fn create_spatial_anchor(
+                xr_instance: &openxr::Instance,
+                session: &openxr::Session<openxr::OpenGlEs>,
+                space: sys::Space,
+                position: openxr::Vector3f,
+                orientation: openxr::Quaternionf,
+                time: sys::Time
+            ) -> Result<sys::AsyncRequestIdFB, openxr::sys::Result> {
+            
+                // Prepare the spatial anchor create info
+                let anchor_create_info = sys::SpatialAnchorCreateInfoFB {
+                    ty: sys::StructureType::SPATIAL_ANCHOR_CREATE_INFO_FB,
+                    next: std::ptr::null(),
+                    space,
+                    pose_in_space: sys::Posef {
+                        position,
+                        orientation,
+                    },
+                    time,
+                };
+            
+                // Initialize a variable to receive the request ID
+                let mut request_id: sys::AsyncRequestIdFB = Default::default();
+            
+                // Call the function to create the spatial anchor
+                let result = unsafe {
+                    if let Some(create_spatial_anchor_fn) = xr_instance.exts().fb_spatial_entity {
+                        (create_spatial_anchor_fn.create_spatial_anchor)(session.as_raw(), &anchor_create_info, &mut request_id)
+                    } else {
+                        eprintln!("Failed to create spatial anchor: fb_spatial_entity extension not available");
+                        return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
+                    }
+                };
+            
+                if result == sys::Result::SUCCESS {
+                    Ok(request_id)
+                } else {
+                    Err(result)
+                }
+            }
+
+            if let Err(e) = create_spatial_anchor(
+                &xr_session.instance(),
+                xr_session,
+                interaction::get_reference_space(xr_session, xr::ReferenceSpaceType::LOCAL).as_raw(),
+                view.pose.position,
+                view.pose.orientation,
+                tracker_time
+            ) {
+                eprintln!("Failed to create spatial anchor: {:?}", e);
+            } else {
+                println!("Spatial anchor created successfully with position and orientation: {:?}, {:?}", view.pose.position, view.pose.orientation);
+            }
+
         }
 
         deadline += frame_interval / 3;
