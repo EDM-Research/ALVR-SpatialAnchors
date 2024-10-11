@@ -672,8 +672,84 @@ fn create_spatial_anchor(
         }
     };
 
+    fn handle_spatial_anchor_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<sys::Space> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpatialAnchorCreateCompleteFB(event) = event {
+                    println!("Spatial anchor saved successfully with space handle: {:?}", event.space());
+                    return Some(event.space());
+                }
+            }
+        }
+
+        None
+    }
+
     if result == sys::Result::SUCCESS {
-        Ok(request_id)
+
+        println!("Spatial anchor creation request submitted successfully");
+
+        let spatial_anchor = loop {
+            println!("Polling for spatial anchor event...");
+            if let Some(anchor) = handle_spatial_anchor_event(xr_instance) {
+            break anchor;
+            }
+            println!("Waiting for spatial anchor event...");
+        };
+
+        // Print the spatial anchor handle
+        println!("Spatial anchor handle: {:?}", spatial_anchor);
+
+        let mut space_component_request_id: sys::AsyncRequestIdFB = Default::default();
+        let mut space_component_status = sys::SpaceComponentStatusSetInfoFB {
+            ty: sys::StructureType::SPACE_COMPONENT_STATUS_FB,
+            next: std::ptr::null(),
+            component_type: sys::SpaceComponentTypeFB::STORABLE,
+            enabled: sys::TRUE,
+            timeout: xr::Duration::INFINITE
+
+        };
+
+        // Call the function to create the spatial anchor
+        let result2 = unsafe {
+            if let Some(create_spatial_anchor_fn) = xr_instance.exts().fb_spatial_entity {
+                (create_spatial_anchor_fn.set_space_component_status)(spatial_anchor, &mut space_component_status, &mut space_component_request_id)
+            } else {
+                eprintln!("Failed to create spatial anchor: fb_spatial_entity extension not available");
+                return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
+            }
+        };
+
+        let mut save_space_info = sys::SpaceSaveInfoFB {
+            ty: sys::StructureType::SPACE_SAVE_INFO_FB,
+            next: std::ptr::null(),
+            space: spatial_anchor,
+            location: sys::SpaceStorageLocationFB::LOCAL,
+            persistence_mode: sys::SpacePersistenceModeFB::INDEFINITE
+
+        };
+
+        let result3 = unsafe {
+            if let Some(save_space_fn) = xr_instance.exts().fb_spatial_entity_storage {
+                (save_space_fn.save_space)(session.as_raw(), &mut save_space_info, &mut request_id)
+            } else {
+                eprintln!("Failed to save spatial anchor: fb_spatial_entity_storage extension not available");
+                return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
+            }
+
+        };
+
+        if result2 == sys::Result::SUCCESS {
+            println!("Spatial anchor saved successfully");
+            Ok(request_id)
+        } else {
+            Err(result2)
+        }
     } else {
         Err(result)
     }
