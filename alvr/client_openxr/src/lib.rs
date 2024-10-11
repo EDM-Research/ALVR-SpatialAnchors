@@ -167,6 +167,8 @@ pub fn entry_point() {
     exts.khr_convert_timespec_time = true;
     exts.khr_opengl_es_enable = true;
     exts.fb_spatial_entity = available_extensions.fb_spatial_entity;
+    exts.fb_spatial_entity_query = available_extensions.fb_spatial_entity_query;
+    exts.fb_spatial_entity_storage = available_extensions.fb_spatial_entity_storage;
     exts.other = available_extensions
         .other
         .into_iter()
