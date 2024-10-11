@@ -587,6 +587,7 @@ fn query_spatial_anchors(
         };
         if result2 == sys::Result::SUCCESS {
             let mut poses = Vec::new();
+            println!("Retrieved spatial anchor query results number: {:?}", space_query_results.result_count_output);
             for i in 0..space_query_results.result_count_output {
                 let space_query_result_fb = unsafe { *space_query_results.results.offset(i as isize) };
                 let spatial_anchor = space_query_result_fb.space;
@@ -600,6 +601,8 @@ fn query_spatial_anchors(
                     }
                 };
 
+                println!("Locating space...");
+
                 let result3 = unsafe {
                     (xr_instance.fp().locate_space)(
                         spatial_anchor,
@@ -610,6 +613,7 @@ fn query_spatial_anchors(
                 };
 
                 if result3 == sys::Result::SUCCESS {
+                    println!("Constructing poses");
                     poses.push(Pose {
                         position: Vec3::new(
                             spatial_anchor_location.pose.position.x,
@@ -628,6 +632,7 @@ fn query_spatial_anchors(
                 }
                 
             }
+            println!("poses: {:?}", poses); 
             Ok(poses)
         } else {
             Err(result2)
@@ -707,7 +712,7 @@ fn create_spatial_anchor(
 
         let mut space_component_request_id: sys::AsyncRequestIdFB = Default::default();
         let mut space_component_status = sys::SpaceComponentStatusSetInfoFB {
-            ty: sys::StructureType::SPACE_COMPONENT_STATUS_FB,
+            ty: sys::StructureType::SPACE_COMPONENT_STATUS_SET_INFO_FB,
             next: std::ptr::null(),
             component_type: sys::SpaceComponentTypeFB::STORABLE,
             enabled: sys::TRUE,
