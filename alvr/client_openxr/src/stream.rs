@@ -655,7 +655,61 @@ fn create_spatial_anchor(
     position: openxr::Vector3f,
     orientation: openxr::Quaternionf,
     time: sys::Time
-) -> Result<sys::AsyncRequestIdFB, openxr::sys::Result> {
+) -> Result<openxr::sys::Space, openxr::sys::Result> {
+
+    fn handle_spatial_anchor_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<sys::Space> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpatialAnchorCreateCompleteFB(event) = event {
+                    println!("Spatial anchor saved successfully with space handle: {:?}", event.space());
+                    return Some(event.space())
+                }
+            }
+        }
+
+        None
+    }
+
+    fn handle_spatial_anchor_component_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<sys::Space> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpaceSetStatusCompleteFB(event) = event {
+                    println!("Spatial anchor local component set succesfully");
+                    return Some(event.space())
+                }
+            }
+        }
+
+        None
+    }
+
+    fn handle_spatial_anchor_save_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<sys::Space> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpaceSaveCompleteFB(event) = event {
+                    println!("Spatial anchor saved succesfully");
+                    return Some(event.space())
+                }
+            }
+        }
+
+        None
+    }
 
     // Prepare the spatial anchor create info
     let anchor_create_info = sys::SpatialAnchorCreateInfoFB {
@@ -681,24 +735,6 @@ fn create_spatial_anchor(
             return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
         }
     };
-
-    fn handle_spatial_anchor_event(
-        xr_instance: &openxr::Instance
-    ) -> Option<sys::Space> {
-        let mut event_data = xr::EventDataBuffer::new();
-
-        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
-            
-            if let Some(event) = result {
-                if let xr::Event::SpatialAnchorCreateCompleteFB(event) = event {
-                    println!("Spatial anchor saved successfully with space handle: {:?}", event.space());
-                    return Some(event.space());
-                }
-            }
-        }
-
-        None
-    }
 
     if result == sys::Result::SUCCESS {
 
@@ -735,6 +771,14 @@ fn create_spatial_anchor(
 
         if result2 == sys::Result::SUCCESS {
 
+            let spatial_anchor = loop {
+                println!("Polling for spatial anchor component event...");
+                if let Some(anchor) = handle_spatial_anchor_component_event(xr_instance) {
+                    break anchor
+                }
+                println!("Waiting for spatial anchor component event...");
+            };
+
             let mut save_space_info = sys::SpaceSaveInfoFB {
                 ty: sys::StructureType::SPACE_SAVE_INFO_FB,
                 next: std::ptr::null(),
@@ -746,6 +790,7 @@ fn create_spatial_anchor(
     
             let result3 = unsafe {
                 if let Some(save_space_fn) = xr_instance.exts().fb_spatial_entity_storage {
+                    println!("{:?}", save_space_info);
                     (save_space_fn.save_space)(session.as_raw(), &mut save_space_info, &mut request_id)
                 } else {
                     eprintln!("Failed to save spatial anchor: fb_spatial_entity_storage extension not available");
@@ -755,7 +800,17 @@ fn create_spatial_anchor(
             };
 
             if result3 == sys::Result::SUCCESS {
-                Ok(request_id)
+
+                let spatial_anchor = loop {
+                    println!("Polling for spatial anchor save event...");
+                    if let Some(anchor) = handle_spatial_anchor_save_event(xr_instance) {
+                        break anchor
+                    }
+                    println!("Waiting for spatial anchor save event...");
+                };
+
+                println!("CREATE SPATIAL ANCHOR COMPLETE SUCCESS");
+                Ok(spatial_anchor)
             } else {
                 Err(result3)
             }
