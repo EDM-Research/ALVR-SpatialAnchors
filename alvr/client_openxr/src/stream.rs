@@ -566,7 +566,7 @@ fn query_spatial_anchors(
         while let Ok(result) = xr_instance.poll_event(&mut event_data) {
             
             if let Some(event) = result {
-                if let xr::Event::SpaceQueryCompleteFB(event) = event {
+                if let xr::Event::SpaceQueryResultsAvailableFB(event) = event {
                     println!("Spatial anchors query completed successfully");
                     return Some(1)
                 }
