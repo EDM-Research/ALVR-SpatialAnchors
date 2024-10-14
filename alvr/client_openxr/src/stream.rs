@@ -697,12 +697,10 @@ fn create_spatial_anchor(
 
     if result == sys::Result::SUCCESS {
 
-        println!("Spatial anchor creation request submitted successfully");
-
         let spatial_anchor = loop {
             println!("Polling for spatial anchor event...");
             if let Some(anchor) = handle_spatial_anchor_event(xr_instance) {
-            break anchor;
+                break anchor
             }
             println!("Waiting for spatial anchor event...");
         };
