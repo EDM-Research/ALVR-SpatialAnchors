@@ -556,18 +556,28 @@ fn query_spatial_anchors(
     space: sys::Space,
     time: sys::Time
 ) -> Result<Vec<Pose>, openxr::sys::Result> {
+
+    fn handle_spatial_anchor_query_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<i32> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpaceQueryCompleteFB(event) = event {
+                    println!("Spatial anchors query completed successfully");
+                    return Some(1)
+                }
+            }
+        }
+
+        None
+    }
     
     let anchor_query_info = sys::SpaceQueryInfoBaseHeaderFB {
         ty: sys::StructureType::SPACE_QUERY_INFO_FB,
         next: std::ptr::null(),
-    };
-
-    let mut space_query_results = sys::SpaceQueryResultsFB {
-        ty: sys::StructureType::SPACE_QUERY_RESULTS_FB,
-        next: std::ptr::null::<sys::SpaceQueryResultsFB>() as *mut _,
-        result_capacity_input: 0,
-        result_count_output: 0,
-        results: std::ptr::null::<sys::SpaceQueryResultFB>() as *mut _,
     };
 
     let mut async_id : sys::AsyncRequestIdFB = Default::default();
@@ -582,6 +592,23 @@ fn query_spatial_anchors(
     };
 
     if result == sys::Result::SUCCESS {
+
+        loop {
+            println!("Polling for spatial anchor query event...");
+            if let Some(anchor) = handle_spatial_anchor_query_event(xr_instance) {
+                break
+            }
+            println!("Waiting for spatial anchor query event...");
+        };
+
+        let mut space_query_results = sys::SpaceQueryResultsFB {
+            ty: sys::StructureType::SPACE_QUERY_RESULTS_FB,
+            next: std::ptr::null::<sys::SpaceQueryResultsFB>() as *mut _,
+            result_capacity_input: 0,
+            result_count_output: 0,
+            results: std::ptr::null::<sys::SpaceQueryResultFB>() as *mut _,
+        };
+
         let result2 = unsafe {
             if let Some(query_spatial_anchor_fb) = xr_instance.exts().fb_spatial_entity_query {
                 (query_spatial_anchor_fb.retrieve_space_query_results)(session.as_raw(), async_id, &mut space_query_results)
