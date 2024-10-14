@@ -11,7 +11,7 @@ use alvr_client_core::{
 };
 use alvr_common::{
     error,
-    glam::{Quat, UVec2, Vec3},
+    glam::{self, Quat, UVec2, Vec3},
     info, Fov, Pose, HAND_LEFT_ID,
 };
 use extra_extensions::{
@@ -19,7 +19,7 @@ use extra_extensions::{
     META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME,
 };
 use lobby::Lobby;
-use openxr as xr;
+use openxr::{self as xr, sys, ViewConfigurationType};
 use std::{
     path::Path,
     rc::Rc,
@@ -117,6 +117,406 @@ fn default_view() -> xr::View {
             angle_down: -1.0,
         },
     }
+}
+
+fn query_spatial_anchors(
+    xr_instance: &openxr::Instance,
+    session: &openxr::Session<openxr::OpenGlEs>
+) -> Result<Vec<sys::Space>, openxr::sys::Result> {
+
+    fn handle_spatial_anchor_query_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<i32> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpaceQueryResultsAvailableFB(event) = event {
+                    println!("Spatial anchors query completed successfully");
+                    return Some(1)
+                }
+                else if let xr::Event::SpaceQueryCompleteFB(event) = event {
+                    println!("Spatial anchors query completed successfully");
+                    return Some(1)
+                    
+                }
+            }
+        }
+
+        None
+    }
+
+    fn handle_spatial_anchor_component_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<sys::Space> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpaceSetStatusCompleteFB(event) = event {
+                    println!("Spatial anchor local component set succesfully");
+                    return Some(event.space())
+                }
+            }
+        }
+
+        None
+    }
+    
+    let anchor_query_info = sys::SpaceQueryInfoFB {
+        ty: sys::StructureType::SPACE_QUERY_INFO_FB,
+        next: std::ptr::null(),
+        query_action: sys::SpaceQueryActionFB::LOAD,
+        max_result_count: 1000,
+        timeout: openxr::Duration::NONE,
+        filter: std::ptr::null(),
+        exclude_filter: std::ptr::null()
+    };
+
+    let mut async_id : sys::AsyncRequestIdFB = Default::default();
+
+    let result = unsafe {
+        if let Some(query_spatial_anchor_fb) = xr_instance.exts().fb_spatial_entity_query {
+            (query_spatial_anchor_fb.query_spaces)(session.as_raw(), &anchor_query_info as *const _ as *const sys::SpaceQueryInfoBaseHeaderFB, &mut async_id)
+        } else {
+            eprintln!("Failed to query spatial anchor: fb_spatial_entity_query extension not available");
+            return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
+        }
+    };
+
+    if result == sys::Result::SUCCESS {
+
+        loop {
+            println!("Polling for spatial anchor query event...");
+            if let Some(anchor) = handle_spatial_anchor_query_event(xr_instance) {
+                break;
+            }
+            println!("Waiting for spatial anchor query event...");
+        };
+
+        let mut space_query_results = sys::SpaceQueryResultsFB {
+            ty: sys::StructureType::SPACE_QUERY_RESULTS_FB,
+            next: std::ptr::null::<sys::SpaceQueryResultsFB>() as *mut _,
+            result_capacity_input: 0,
+            result_count_output: 0,
+            results: std::ptr::null::<sys::SpaceQueryResultFB>() as *mut _,
+        };
+
+        let result2 = unsafe {
+            if let Some(query_spatial_anchor_fb) = xr_instance.exts().fb_spatial_entity_query {
+
+                (query_spatial_anchor_fb.retrieve_space_query_results)(session.as_raw(), async_id, &mut space_query_results);
+                
+                let num_results = space_query_results.result_count_output;
+
+                let mut results_buffer: Vec<sys::SpaceQueryResultFB> = vec![
+                    sys::SpaceQueryResultFB {
+                        space: sys::Space::NULL,
+                        uuid: sys::UuidEXT {
+                            data: [0; sys::UUID_SIZE_EXT]
+                        },
+                    };
+                    num_results as usize
+                ];                
+
+                space_query_results = sys::SpaceQueryResultsFB {
+                    ty: sys::StructureType::SPACE_QUERY_RESULTS_FB,
+                    next: std::ptr::null::<sys::SpaceQueryResultsFB>() as *mut _,
+                    result_capacity_input: num_results,
+                    result_count_output: num_results,
+                    // Create a buffer to store the results as big as the number of results
+                    results: results_buffer.as_mut_ptr(),
+                };
+
+                (query_spatial_anchor_fb.retrieve_space_query_results)(session.as_raw(), async_id, &mut space_query_results)
+
+            } else {
+                eprintln!("Failed to query spatial anchor: fb_spatial_entity_query extension not available");
+                return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
+            }
+        };
+        if result2 == sys::Result::SUCCESS {
+            let mut spatial_anchors = Vec::new();
+            println!("Retrieved spatial anchor query results number: {:?}", space_query_results.result_count_output);
+            println!("Retrieved spatial anchor query results capacity: {:?}", space_query_results.result_capacity_input);
+            let create_spatial_anchor_fn = xr_instance.exts().fb_spatial_entity;
+
+            for i in 0..space_query_results.result_count_output {
+                let space_query_result_fb = unsafe { space_query_results.results.add(i as usize).read() };
+                let spatial_anchor = space_query_result_fb.space;
+
+                let mut space_component_request_id: sys::AsyncRequestIdFB = Default::default();
+                let mut space_component_status = sys::SpaceComponentStatusSetInfoFB {
+                    ty: sys::StructureType::SPACE_COMPONENT_STATUS_SET_INFO_FB,
+                    next: std::ptr::null(),
+                    component_type: sys::SpaceComponentTypeFB::LOCATABLE,
+                    enabled: sys::TRUE,
+                    timeout: xr::Duration::INFINITE
+
+                };
+
+                // Call the function to create the spatial anchor
+                let result3 = unsafe {
+                    if let Some(create_spatial_anchor_fn) = create_spatial_anchor_fn {
+                        (create_spatial_anchor_fn.set_space_component_status)(spatial_anchor, &mut space_component_status, &mut space_component_request_id)
+                    } else {
+                        eprintln!("Failed to create spatial anchor: fb_spatial_entity extension not available");
+                        return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
+                    }
+                };
+
+                if result3 == sys::Result::SUCCESS {
+
+                    let spatial_anchor = loop {
+                        println!("Polling for spatial anchor component event...");
+                        if let Some(anchor) = handle_spatial_anchor_component_event(xr_instance) {
+                            break anchor
+                        }
+                        println!("Waiting for spatial anchor component event...");
+                    };
+
+                    spatial_anchors.push(spatial_anchor);
+             
+                } else {
+                    eprintln!("Failed to set spatial anchor component status: {:?}", result3);
+                }
+            }
+            Ok(spatial_anchors)
+        } else {
+            Err(result2)
+        }
+    } else {
+        Err(result)
+    }
+}
+
+fn create_spatial_anchor(
+    xr_instance: &openxr::Instance,
+    session: &openxr::Session<openxr::OpenGlEs>,
+    space: sys::Space,
+    position: openxr::Vector3f,
+    orientation: openxr::Quaternionf,
+    time: sys::Time
+) -> Result<openxr::sys::Space, openxr::sys::Result> {
+
+    fn handle_spatial_anchor_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<sys::Space> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpatialAnchorCreateCompleteFB(event) = event {
+                    println!("Spatial anchor saved successfully with space handle: {:?}", event.space());
+                    return Some(event.space())
+                }
+            }
+        }
+
+        None
+    }
+
+    fn handle_spatial_anchor_component_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<sys::Space> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpaceSetStatusCompleteFB(event) = event {
+                    println!("Spatial anchor local component set succesfully");
+                    return Some(event.space())
+                }
+            }
+        }
+
+        None
+    }
+
+    fn handle_spatial_anchor_save_event(
+        xr_instance: &openxr::Instance
+    ) -> Option<sys::Space> {
+        let mut event_data = xr::EventDataBuffer::new();
+
+        while let Ok(result) = xr_instance.poll_event(&mut event_data) {
+            
+            if let Some(event) = result {
+                if let xr::Event::SpaceSaveCompleteFB(event) = event {
+                    println!("Spatial anchor saved succesfully");
+                    return Some(event.space())
+                }
+            }
+        }
+
+        None
+    }
+
+    // Prepare the spatial anchor create info
+    let anchor_create_info = sys::SpatialAnchorCreateInfoFB {
+        ty: sys::StructureType::SPATIAL_ANCHOR_CREATE_INFO_FB,
+        next: std::ptr::null(),
+        space,
+        pose_in_space: sys::Posef {
+            position,
+            orientation,
+        },
+        time,
+    };
+
+    // Initialize a variable to receive the request ID
+    let mut request_id: sys::AsyncRequestIdFB = Default::default();
+
+    // Call the function to create the spatial anchor
+    let result = unsafe {
+        if let Some(create_spatial_anchor_fn) = xr_instance.exts().fb_spatial_entity {
+            (create_spatial_anchor_fn.create_spatial_anchor)(session.as_raw(), &anchor_create_info, &mut request_id)
+        } else {
+            eprintln!("Failed to create spatial anchor: fb_spatial_entity extension not available");
+            return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
+        }
+    };
+
+    if result == sys::Result::SUCCESS {
+
+        let spatial_anchor = loop {
+            println!("Polling for spatial anchor event...");
+            if let Some(anchor) = handle_spatial_anchor_event(xr_instance) {
+                break anchor
+            }
+            println!("Waiting for spatial anchor event...");
+        };
+
+        // Print the spatial anchor handle
+        println!("Spatial anchor handle: {:?}", spatial_anchor);
+
+        let mut space_component_request_id: sys::AsyncRequestIdFB = Default::default();
+        let mut space_component_status = sys::SpaceComponentStatusSetInfoFB {
+            ty: sys::StructureType::SPACE_COMPONENT_STATUS_SET_INFO_FB,
+            next: std::ptr::null(),
+            component_type: sys::SpaceComponentTypeFB::STORABLE,
+            enabled: sys::TRUE,
+            timeout: xr::Duration::INFINITE
+
+        };
+
+        // Call the function to create the spatial anchor
+        let result2 = unsafe {
+            if let Some(create_spatial_anchor_fn) = xr_instance.exts().fb_spatial_entity {
+                (create_spatial_anchor_fn.set_space_component_status)(spatial_anchor, &mut space_component_status, &mut space_component_request_id)
+            } else {
+                eprintln!("Failed to create spatial anchor: fb_spatial_entity extension not available");
+                return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
+            }
+        };
+
+        if result2 == sys::Result::SUCCESS {
+
+            let spatial_anchor = loop {
+                println!("Polling for spatial anchor component event...");
+                if let Some(anchor) = handle_spatial_anchor_component_event(xr_instance) {
+                    break anchor
+                }
+                println!("Waiting for spatial anchor component event...");
+            };
+
+            let mut save_space_info = sys::SpaceSaveInfoFB {
+                ty: sys::StructureType::SPACE_SAVE_INFO_FB,
+                next: std::ptr::null(),
+                space: spatial_anchor,
+                location: sys::SpaceStorageLocationFB::LOCAL,
+                persistence_mode: sys::SpacePersistenceModeFB::INDEFINITE
+    
+            };
+    
+            let result3 = unsafe {
+                if let Some(save_space_fn) = xr_instance.exts().fb_spatial_entity_storage {
+                    println!("{:?}", save_space_info);
+                    (save_space_fn.save_space)(session.as_raw(), &mut save_space_info, &mut request_id)
+                } else {
+                    eprintln!("Failed to save spatial anchor: fb_spatial_entity_storage extension not available");
+                    return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
+                }
+    
+            };
+
+            if result3 == sys::Result::SUCCESS {
+
+                let spatial_anchor = loop {
+                    println!("Polling for spatial anchor save event...");
+                    if let Some(anchor) = handle_spatial_anchor_save_event(xr_instance) {
+                        break anchor
+                    }
+                    println!("Waiting for spatial anchor save event...");
+                };
+
+                println!("CREATE SPATIAL ANCHOR COMPLETE SUCCESS");
+                Ok(spatial_anchor)
+            } else {
+                Err(result3)
+            }
+
+        } else {
+            Err(result2)
+        }
+        
+    } else {
+        Err(result)
+    }
+}
+
+fn locate_spatial_anchors(
+    xr_instance: &openxr::Instance,
+    spatial_anchor: sys::Space,
+    space: sys::Space,
+    time: sys::Time
+
+) -> Result<Pose, openxr::sys::Result> {
+
+    let mut spatial_anchor_location = sys::SpaceLocation{
+        ty: sys::StructureType::SPACE_LOCATION,
+        next: std::ptr::null::<sys::SpaceLocation>() as *mut _,
+        location_flags: sys::SpaceLocationFlags::POSITION_VALID | sys::SpaceLocationFlags::ORIENTATION_VALID,
+        pose: sys::Posef {
+            position: openxr::Vector3f { x: 0.0, y: 0.0, z: 0.0 },
+            orientation: openxr::Quaternionf::IDENTITY
+        }
+    };
+
+    println!("Locating space...");
+
+    let result = unsafe {
+        (xr_instance.fp().locate_space)(
+            spatial_anchor,
+            space,
+            time,
+            &mut spatial_anchor_location,
+        )
+    };
+
+    if result == sys::Result::SUCCESS {
+        println!("Constructing poses");
+        Ok(Pose {
+            position: Vec3::new(
+                spatial_anchor_location.pose.position.x,
+                spatial_anchor_location.pose.position.y,
+                spatial_anchor_location.pose.position.z,
+            ),
+            orientation: glam::Quat::from_xyzw(
+                spatial_anchor_location.pose.orientation.x,
+                spatial_anchor_location.pose.orientation.y,
+                spatial_anchor_location.pose.orientation.z,
+                spatial_anchor_location.pose.orientation.w,
+            ),
+        })
+
+    } else {
+        eprintln!("Failed to locate space: {:?}", result);
+        Err(result)
+    } 
 }
 
 pub fn entry_point() {
@@ -285,6 +685,23 @@ pub fn entry_point() {
         let mut stream_context = None::<StreamContext>;
 
         let mut event_storage = xr::EventDataBuffer::new();
+        
+        let mut spatial_anchors: Vec<xr::sys::Space> = Vec::new();
+        let mut last_anchor_place_time = Instant::now();
+        let mut last_anchor_query_time = Instant::now();
+
+        let result = query_spatial_anchors(&xr_context.clone().instance.clone(), &xr_context.clone().session.clone());
+
+        match result {
+            Ok(anchors) => {
+                spatial_anchors = anchors;
+                println!("Spatial anchors queried successfully");
+            }
+            Err(e) => {
+                eprintln!("Failed to query spatial anchors: {:?}", e);
+            }
+        }  
+
         'render_loop: loop {
             while let Some(event) = xr_instance.poll_event(&mut event_storage).unwrap() {
                 match event {
@@ -486,7 +903,60 @@ pub fn entry_point() {
                     )
                     .unwrap();
             }
+
+            // Place an anchor every 10 seconds
+            if Instant::now().duration_since(last_anchor_place_time) > Duration::from_secs(10) {
+                
+                let view = xr_session.locate_views(
+                    ViewConfigurationType::PRIMARY_STEREO, to_xr_time(display_time), &&interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL))
+                    .unwrap().1[0];
+
+                let anchor_position = xr::Vector3f {
+                    x: view.pose.position.x,
+                    y: view.pose.position.y,
+                    z: view.pose.position.z,
+                };
+
+                let anchor_orientation = xr::Quaternionf {
+                    x: view.pose.orientation.x,
+                    y: view.pose.orientation.y,
+                    z: view.pose.orientation.z,
+                    w: view.pose.orientation.w,
+                };
+
+                let result = create_spatial_anchor(&xr_instance, &xr_session, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL).as_raw(), anchor_position, anchor_orientation, to_xr_time(display_time));
+                match result {
+                    Ok(anchor) => {
+                        spatial_anchors.push(anchor);
+                        println!("Spatial anchor created successfully");
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to create spatial anchor: {:?}", e);
+                    }
+                }  
+
+                last_anchor_place_time = Instant::now();
+
+            }
+
+            // Locate the spatial anchors every 1 second
+            if Instant::now().duration_since(last_anchor_query_time) > Duration::from_secs(1) {
+                for anchor in spatial_anchors.iter() {
+                    let result = locate_spatial_anchors(&xr_instance, *anchor, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL).as_raw(), to_xr_time(display_time));
+                    match result {
+                        Ok(pose) => {
+                            println!("Spatial anchor located successfully with pose: {:?}", pose);
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to locate spatial anchor: {:?}", e);
+                        }
+                    }  
+                }
+                last_anchor_query_time = Instant::now();
+            }
+
         }
+
     }
 
     // grapics_context is dropped here
