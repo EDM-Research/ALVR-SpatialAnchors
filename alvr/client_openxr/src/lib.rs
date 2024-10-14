@@ -689,19 +689,6 @@ pub fn entry_point() {
         let mut spatial_anchors: Vec<xr::sys::Space> = Vec::new();
         let mut last_anchor_place_time = Instant::now();
         let mut last_anchor_query_time = Instant::now();
-
-        let result = query_spatial_anchors(&xr_context.clone().instance.clone(), &xr_context.clone().session.clone());
-
-        match result {
-            Ok(anchors) => {
-                spatial_anchors = anchors;
-                println!("Spatial anchors queried successfully");
-            }
-            Err(e) => {
-                eprintln!("Failed to query spatial anchors: {:?}", e);
-            }
-        }  
-
         'render_loop: loop {
             while let Some(event) = xr_instance.poll_event(&mut event_storage).unwrap() {
                 match event {
@@ -716,6 +703,18 @@ pub fn entry_point() {
                                 .unwrap();
 
                             core_context.resume();
+
+                            let result = query_spatial_anchors(&xr_instance, &xr_session);
+
+                            match result {
+                                Ok(anchors) => {
+                                    spatial_anchors = anchors;
+                                    println!("Spatial anchors queried successfully");
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to query spatial anchors: {:?}", e);
+                                }
+                            }  
 
                             session_running = true;
                         }
