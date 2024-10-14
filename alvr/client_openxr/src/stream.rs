@@ -19,6 +19,7 @@ use alvr_session::{
     FaceTrackingSourcesConfig, FoveatedEncodingConfig,
 };
 use openxr::{self as xr, sys, ViewConfigurationType};
+use core::num;
 use std::{
     rc::Rc,
     sync::Arc,
@@ -575,16 +576,21 @@ fn query_spatial_anchors(
         None
     }
     
-    let anchor_query_info = sys::SpaceQueryInfoBaseHeaderFB {
+    let anchor_query_info = sys::SpaceQueryInfoFB {
         ty: sys::StructureType::SPACE_QUERY_INFO_FB,
         next: std::ptr::null(),
+        query_action: sys::SpaceQueryActionFB::LOAD,
+        max_result_count: 1000,
+        timeout: openxr::Duration::NONE,
+        filter: std::ptr::null(),
+        exclude_filter: std::ptr::null()
     };
 
     let mut async_id : sys::AsyncRequestIdFB = Default::default();
 
     let result = unsafe {
         if let Some(query_spatial_anchor_fb) = xr_instance.exts().fb_spatial_entity_query {
-            (query_spatial_anchor_fb.query_spaces)(session.as_raw(), &anchor_query_info, &mut async_id)
+            (query_spatial_anchor_fb.query_spaces)(session.as_raw(), &anchor_query_info as *const _ as *const sys::SpaceQueryInfoBaseHeaderFB, &mut async_id)
         } else {
             eprintln!("Failed to query spatial anchor: fb_spatial_entity_query extension not available");
             return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
@@ -596,7 +602,7 @@ fn query_spatial_anchors(
         loop {
             println!("Polling for spatial anchor query event...");
             if let Some(anchor) = handle_spatial_anchor_query_event(xr_instance) {
-                break
+                break;
             }
             println!("Waiting for spatial anchor query event...");
         };
@@ -611,7 +617,32 @@ fn query_spatial_anchors(
 
         let result2 = unsafe {
             if let Some(query_spatial_anchor_fb) = xr_instance.exts().fb_spatial_entity_query {
+
+                (query_spatial_anchor_fb.retrieve_space_query_results)(session.as_raw(), async_id, &mut space_query_results);
+                
+                let num_results = space_query_results.result_count_output;
+
+                let mut results_buffer: Vec<sys::SpaceQueryResultFB> = vec![
+                    sys::SpaceQueryResultFB {
+                        space: sys::Space::NULL,
+                        uuid: sys::UuidEXT {
+                            data: [0; sys::UUID_SIZE_EXT]
+                        },
+                    };
+                    num_results as usize
+                ];                
+
+                space_query_results = sys::SpaceQueryResultsFB {
+                    ty: sys::StructureType::SPACE_QUERY_RESULTS_FB,
+                    next: std::ptr::null::<sys::SpaceQueryResultsFB>() as *mut _,
+                    result_capacity_input: num_results,
+                    result_count_output: num_results,
+                    // Create a buffer to store the results as big as the number of results
+                    results: results_buffer.as_mut_ptr(),
+                };
+
                 (query_spatial_anchor_fb.retrieve_space_query_results)(session.as_raw(), async_id, &mut space_query_results)
+
             } else {
                 eprintln!("Failed to query spatial anchor: fb_spatial_entity_query extension not available");
                 return Err(sys::Result::ERROR_EXTENSION_NOT_PRESENT);
@@ -620,8 +651,9 @@ fn query_spatial_anchors(
         if result2 == sys::Result::SUCCESS {
             let mut poses = Vec::new();
             println!("Retrieved spatial anchor query results number: {:?}", space_query_results.result_count_output);
+            println!("Retrieved spatial anchor query results capacity: {:?}", space_query_results.result_capacity_input);
             for i in 0..space_query_results.result_count_output {
-                let space_query_result_fb = unsafe { *space_query_results.results.offset(i as isize) };
+                let space_query_result_fb = unsafe { space_query_results.results.add(i as usize).read() };
                 let spatial_anchor = space_query_result_fb.space;
                 let mut spatial_anchor_location = sys::SpaceLocation{
                     ty: sys::StructureType::SPACE_LOCATION,
@@ -661,15 +693,12 @@ fn query_spatial_anchors(
                     });
                 } else {
                     eprintln!("Failed to locate space: {:?}", result3);
-                }
-                
+                }  
             }
-            println!("poses: {:?}", poses); 
             Ok(poses)
         } else {
             Err(result2)
         }
-
     } else {
         Err(result)
     }
