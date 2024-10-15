@@ -29,6 +29,10 @@ use std::{
 };
 use stream::StreamContext;
 
+use rosc::encoder;
+use rosc::{OscMessage, OscPacket, OscType};
+use std::net::{SocketAddrV4, UdpSocket};
+
 const DECODER_MAX_TIMEOUT_MULTIPLIER: f32 = 0.8;
 
 fn from_xr_vec3(v: xr::Vector3f) -> Vec3 {
@@ -486,8 +490,6 @@ fn locate_spatial_anchors(
         }
     };
 
-    println!("Locating space...");
-
     let result = unsafe {
         (xr_instance.fp().locate_space)(
             spatial_anchor,
@@ -498,7 +500,6 @@ fn locate_spatial_anchors(
     };
 
     if result == sys::Result::SUCCESS {
-        println!("Constructing poses");
         Ok(Pose {
             position: Vec3::new(
                 spatial_anchor_location.pose.position.x,
@@ -686,9 +687,13 @@ pub fn entry_point() {
 
         let mut event_storage = xr::EventDataBuffer::new();
         
+        //CUSTOM VARIABLES
         let mut spatial_anchors: Vec<xr::sys::Space> = Vec::new();
         let mut last_anchor_place_time = Instant::now();
-        let mut last_anchor_query_time = Instant::now();
+        let host_address = "172.16.4.120:8002";
+        let socket = UdpSocket::bind(host_address).expect("Couldn't bind to address");
+        let target_address = "172.16.4.126:8002".parse::<SocketAddrV4>().expect("Couldn't parse target address");
+
         'render_loop: loop {
             while let Some(event) = xr_instance.poll_event(&mut event_storage).unwrap() {
                 match event {
@@ -906,7 +911,7 @@ pub fn entry_point() {
             }
 
             // Place an anchor every 10 seconds
-            if Instant::now().duration_since(last_anchor_place_time) > Duration::from_secs(10) {
+            if Instant::now().duration_since(last_anchor_place_time) > Duration::from_secs(2) {
                 
                 let view = xr_session.locate_views(
                     ViewConfigurationType::PRIMARY_STEREO, to_xr_time(display_time), &&interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL))
@@ -941,21 +946,39 @@ pub fn entry_point() {
             }
 
             // Locate the spatial anchors every 1 second
-            if Instant::now().duration_since(last_anchor_query_time) > Duration::from_secs(1) {
-                for anchor in spatial_anchors.iter() {
-                    let result = locate_spatial_anchors(&xr_instance, *anchor, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL).as_raw(), to_xr_time(display_time));
-                    match result {
-                        Ok(pose) => {
-                            println!("Spatial anchor located successfully with pose: {:?}", pose);
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to locate spatial anchor: {:?}", e);
-                        }
-                    }  
+
+            let poses = spatial_anchors.iter().map(|anchor| {
+                locate_spatial_anchors(&xr_instance, *anchor, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL).as_raw(), to_xr_time(display_time))
+            });
+
+            let mut args = Vec::new();
+            for (i, pose_result) in poses.enumerate() {
+            match pose_result {
+                Ok(pose) => {
+                args.push(OscType::Int(i as i32));
+                args.push(OscType::Float(pose.position.x));
+                args.push(OscType::Float(pose.position.y));
+                args.push(OscType::Float(pose.position.z));
+                args.push(OscType::Float(pose.orientation.x));
+                args.push(OscType::Float(pose.orientation.y));
+                args.push(OscType::Float(pose.orientation.z));
+                args.push(OscType::Float(pose.orientation.w));
                 }
-                last_anchor_query_time = Instant::now();
+                Err(e) => {
+                eprintln!("Failed to locate spatial anchor {}: {:?}", i, e);
+                }
+            }
             }
 
+            if !args.is_empty() {
+            let msg = OscMessage {
+                addr: "/spatial_anchors".to_string(),
+                args,
+            };
+            let packet = OscPacket::Message(msg);
+            let encoded_msg = encoder::encode(&packet).unwrap();
+            socket.send_to(&encoded_msg, target_address).expect("Couldn't send data");
+            }
         }
 
     }
