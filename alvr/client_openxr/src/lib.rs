@@ -704,18 +704,6 @@ pub fn entry_point() {
 
                             core_context.resume();
 
-                            let result = query_spatial_anchors(&xr_instance, &xr_session);
-
-                            match result {
-                                Ok(anchors) => {
-                                    spatial_anchors = anchors;
-                                    println!("Spatial anchors queried successfully");
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to query spatial anchors: {:?}", e);
-                                }
-                            }  
-
                             session_running = true;
                         }
                         xr::SessionState::STOPPING => {
@@ -727,6 +715,20 @@ pub fn entry_point() {
                         }
                         xr::SessionState::EXITING => break 'render_loop,
                         xr::SessionState::LOSS_PENDING => break 'render_loop,
+                        xr::SessionState::FOCUSED => {
+
+                            let result = query_spatial_anchors(&xr_instance, &xr_session);
+
+                            match result {
+                                Ok(anchors) => {
+                                    spatial_anchors = anchors;
+                                    println!("Spatial anchors queried successfully");
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to query spatial anchors: {:?}", e);
+                                }
+                            }  
+                        }
                         _ => (),
                     },
                     xr::Event::ReferenceSpaceChangePending(event) => {

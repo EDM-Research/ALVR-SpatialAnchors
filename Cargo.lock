@@ -241,6 +241,7 @@ dependencies = [
  "libc",
  "ndk-context",
  "openxr",
+ "rosc",
 ]
 
 [[package]]

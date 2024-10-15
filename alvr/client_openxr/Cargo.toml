@@ -14,6 +14,7 @@ alvr_common.workspace = true
 alvr_client_core.workspace = true
 alvr_packets.workspace = true
 alvr_session.workspace = true
+rosc = "~0.10"
 
 openxr = { git = "https://github.com/Ralith/openxrs", rev = "9270509d23dc774b43a8b7289e8adf69fcac6828" }
 
