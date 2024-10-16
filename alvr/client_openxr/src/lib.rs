@@ -126,7 +126,7 @@ fn default_view() -> xr::View {
 fn query_spatial_anchors(
     xr_instance: &openxr::Instance,
     session: &openxr::Session<openxr::OpenGlEs>
-) -> Result<Vec<sys::Space>, openxr::sys::Result> {
+) -> Result<Vec<(sys::Space, sys::UuidEXT)>, openxr::sys::Result> {
 
     fn handle_spatial_anchor_query_event(
         xr_instance: &openxr::Instance
@@ -250,6 +250,7 @@ fn query_spatial_anchors(
             for i in 0..space_query_results.result_count_output {
                 let space_query_result_fb = unsafe { space_query_results.results.add(i as usize).read() };
                 let spatial_anchor = space_query_result_fb.space;
+                let spatial_anchor_id = space_query_result_fb.uuid;
 
                 let mut space_component_request_id: sys::AsyncRequestIdFB = Default::default();
                 let mut space_component_status = sys::SpaceComponentStatusSetInfoFB {
@@ -281,7 +282,7 @@ fn query_spatial_anchors(
                         println!("Waiting for spatial anchor component event...");
                     };
 
-                    spatial_anchors.push(spatial_anchor);
+                    spatial_anchors.push((spatial_anchor, spatial_anchor_id));
              
                 } else {
                     eprintln!("Failed to set spatial anchor component status: {:?}", result3);
@@ -303,11 +304,11 @@ fn create_spatial_anchor(
     position: openxr::Vector3f,
     orientation: openxr::Quaternionf,
     time: sys::Time
-) -> Result<openxr::sys::Space, openxr::sys::Result> {
+) -> Result<(openxr::sys::Space, sys::UuidEXT), openxr::sys::Result> {
 
     fn handle_spatial_anchor_event(
         xr_instance: &openxr::Instance
-    ) -> Option<sys::Space> {
+    ) -> Option<(openxr::sys::Space, sys::UuidEXT)> {
         let mut event_data = xr::EventDataBuffer::new();
 
         while let Ok(result) = xr_instance.poll_event(&mut event_data) {
@@ -315,7 +316,7 @@ fn create_spatial_anchor(
             if let Some(event) = result {
                 if let xr::Event::SpatialAnchorCreateCompleteFB(event) = event {
                     println!("Spatial anchor saved successfully with space handle: {:?}", event.space());
-                    return Some(event.space())
+                    return Some((event.space(), event.uuid()))
                 }
             }
         }
@@ -386,10 +387,10 @@ fn create_spatial_anchor(
 
     if result == sys::Result::SUCCESS {
 
-        let spatial_anchor = loop {
+        let (spatial_anchor, spatial_anchor_id) = loop {
             println!("Polling for spatial anchor event...");
-            if let Some(anchor) = handle_spatial_anchor_event(xr_instance) {
-                break anchor
+            if let Some((anchor, anchor_id)) = handle_spatial_anchor_event(xr_instance) {
+                break (anchor, anchor_id)
             }
             println!("Waiting for spatial anchor event...");
         };
@@ -458,7 +459,7 @@ fn create_spatial_anchor(
                 };
 
                 println!("CREATE SPATIAL ANCHOR COMPLETE SUCCESS");
-                Ok(spatial_anchor)
+                Ok((spatial_anchor, spatial_anchor_id))
             } else {
                 Err(result3)
             }
@@ -688,7 +689,7 @@ pub fn entry_point() {
         let mut event_storage = xr::EventDataBuffer::new();
         
         //CUSTOM VARIABLES
-        let mut spatial_anchors: Vec<xr::sys::Space> = Vec::new();
+        let mut spatial_anchors: Vec<(xr::sys::Space, sys::UuidEXT)> = Vec::new();
         let mut last_anchor_place_time = Instant::now();
         let host_address = "172.16.4.120:8002";
         let socket = UdpSocket::bind(host_address).expect("Couldn't bind to address");
@@ -947,15 +948,15 @@ pub fn entry_point() {
 
             // Locate the spatial anchors every 1 second
 
-            let poses = spatial_anchors.iter().map(|anchor| {
-                locate_spatial_anchors(&xr_instance, *anchor, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL).as_raw(), to_xr_time(display_time))
+            let poses = spatial_anchors.iter().map(|(anchor_space, _)| {
+                locate_spatial_anchors(&xr_instance, *anchor_space, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL).as_raw(), to_xr_time(display_time))
             });
 
             let mut args = Vec::new();
             for (i, pose_result) in poses.enumerate() {
             match pose_result {
                 Ok(pose) => {
-                args.push(OscType::Int(i as i32));
+                args.push(OscType::Int(spatial_anchors[i].1.data[0] as i32));
                 args.push(OscType::Float(pose.position.x));
                 args.push(OscType::Float(pose.position.y));
                 args.push(OscType::Float(pose.position.z));
