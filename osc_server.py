@@ -2,6 +2,7 @@ import argparse
 import math
 import threading
 import queue
+import time
 
 from pythonosc.dispatcher import Dispatcher
 from pythonosc import osc_server
@@ -11,6 +12,9 @@ import numpy as np
 
 
 def custom_handler(address, *args):
+
+    print("Received message: ", address, args)
+
     # Extract the arguments
     # Arguments contains the id, x, y, z, qx, qy, qz, qw 
 
@@ -30,11 +34,16 @@ def custom_handler(address, *args):
 
         anchors.append([x, y, z])
 
+        print("Anchor ID: ", id)
+        print("Position: ", x, y, z)
+        print("Orientation: ", qx, qy, qz, qw)
+
     # Put the anchors in the queue
     data_queue.put(anchors)
 
 
 def visualizer_thread():
+
     global vis, pcd
 
     # Initialize Open3D visualizer
@@ -51,28 +60,33 @@ def visualizer_thread():
     first_time = True
 
     while True:
+
+        time.sleep(0.1)
+
         # Get the anchors from the queue
-        anchors = data_queue.get()
+        try:
+            anchors = data_queue.get(block=False)
+            # Update the point cloud
+            points = np.array(anchors)
 
-        # Update the point cloud
-        points = np.array(anchors)
+            # Convert from y up x right z back to y back x right z up
+            points = points[:, [2, 0, 1]]
 
-        # Convert from y up x right z back to y back x right z up
-        points = points[:, [2, 0, 1]]
+            pcd.points = o3d.utility.Vector3dVector(points)
+            pcd.colors = o3d.utility.Vector3dVector(np.zeros((len(anchors), 3)))
+            # Recenter the view
+            if first_time:
+                vis.reset_view_point(True)
+                first_time = False
 
-        pcd.points = o3d.utility.Vector3dVector(points)
-        pcd.colors = o3d.utility.Vector3dVector(np.zeros((len(anchors), 3)))
-        # Recenter the view
-        if first_time:
-            vis.reset_view_point(True)
-            first_time = False
+            vis.update_geometry(pcd)
+            vis.poll_events()
+            vis.update_renderer()
 
-        vis.update_geometry(pcd)
-        vis.poll_events()
-        vis.update_renderer()
-
-        data_queue.task_done()
-
+            data_queue.task_done()
+        except queue.Empty:
+            print("No data in the queue")
+            continue
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -93,15 +107,16 @@ if __name__ == "__main__":
     # Create a queue to communicate between threads
     data_queue = queue.Queue()
 
-    # Start the visualizer thread
-    vis_thread = threading.Thread(target=visualizer_thread)
-    vis_thread.daemon = True
-    vis_thread.start()
-
-    print("Visualizer thread started")
-
     try:
+         # Start the visualizer thread
+        vis_thread = threading.Thread(target=visualizer_thread)
+        vis_thread.daemon = True
+        vis_thread.start()
+
+        print("Visualizer thread started")
+
         server.serve_forever()
+        
     except KeyboardInterrupt:
         pass
     finally:
