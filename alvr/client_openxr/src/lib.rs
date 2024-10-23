@@ -33,6 +33,8 @@ use rosc::{encoder, decoder};
 use rosc::{OscMessage, OscPacket, OscType};
 use std::net::{SocketAddrV4, UdpSocket};
 
+use uuid::Uuid;
+
 const DECODER_MAX_TIMEOUT_MULTIPLIER: f32 = 0.8;
 
 fn from_xr_vec3(v: xr::Vector3f) -> Vec3 {
@@ -123,9 +125,40 @@ fn default_view() -> xr::View {
     }
 }
 
+fn poll_osc_messages(socket: &UdpSocket) -> Vec<OscPacket> {
+    let mut buf = [0; 1024];
+    let mut packets = Vec::new();
+   
+    match socket.recv_from(&mut buf) {
+        Ok((amt, _src)) => {
+            match decoder::decode_udp(&buf[..amt]) {
+                Ok((_, packet)) => {
+                    packets.push(packet);
+                }
+                Err(e) => {
+                    error!("Failed to decode OSC packet: {e}");
+                }
+            }
+        }
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            // No message, just return an empty vector
+        }
+        Err(e) => {
+            error!("Failed to receive OSC packet: {e}");
+        }
+    }
+    packets
+}
+
+fn send_osc_message(socket: &UdpSocket, packet: &OscPacket, target_address: SocketAddrV4) {
+    let encoded_msg = encoder::encode(&packet).unwrap();
+    socket.send_to(&encoded_msg, target_address).expect("Couldn't send data");
+}
+
 fn query_spatial_anchors(
     xr_instance: &openxr::Instance,
-    session: &openxr::Session<openxr::OpenGlEs>
+    session: &openxr::Session<openxr::OpenGlEs>,
+    uuids: &Vec<sys::UuidEXT>
 ) -> Result<Vec<(sys::Space, sys::UuidEXT)>, openxr::sys::Result> {
 
     fn handle_spatial_anchor_query_event(
@@ -252,6 +285,11 @@ fn query_spatial_anchors(
                 let spatial_anchor = space_query_result_fb.space;
                 let spatial_anchor_id = space_query_result_fb.uuid;
 
+                // Only continue if the id is in the list of requested ids
+                if !uuids.iter().any(|uuid| uuid.data == spatial_anchor_id.data) {
+                    continue;
+                }
+
                 let mut space_component_request_id: sys::AsyncRequestIdFB = Default::default();
                 let mut space_component_status = sys::SpaceComponentStatusSetInfoFB {
                     ty: sys::StructureType::SPACE_COMPONENT_STATUS_SET_INFO_FB,
@@ -281,12 +319,12 @@ fn query_spatial_anchors(
                         }
                         println!("Waiting for spatial anchor component event...");
                     };
-
-                    spatial_anchors.push((spatial_anchor, spatial_anchor_id));
-             
                 } else {
                     eprintln!("Failed to set spatial anchor component status: {:?}", result3);
                 }
+
+                spatial_anchors.push((spatial_anchor, spatial_anchor_id));
+
             }
             Ok(spatial_anchors)
         } else {
@@ -399,9 +437,17 @@ fn create_spatial_anchor(
         println!("Spatial anchor handle: {:?}", spatial_anchor);
 
         let mut space_component_request_id: sys::AsyncRequestIdFB = Default::default();
-        let mut space_component_status = sys::SpaceComponentStatusSetInfoFB {
+        let mut space_component_status2 = sys::SpaceComponentStatusSetInfoFB {
             ty: sys::StructureType::SPACE_COMPONENT_STATUS_SET_INFO_FB,
             next: std::ptr::null(),
+            component_type: sys::SpaceComponentTypeFB::LOCATABLE,
+            enabled: sys::TRUE,
+            timeout: xr::Duration::INFINITE
+
+        };
+        let mut space_component_status = sys::SpaceComponentStatusSetInfoFB {
+            ty: sys::StructureType::SPACE_COMPONENT_STATUS_SET_INFO_FB,
+            next: &space_component_status2 as *const _ as *const sys::SpaceComponentStatusSetInfoFB as *mut _,
             component_type: sys::SpaceComponentTypeFB::STORABLE,
             enabled: sys::TRUE,
             timeout: xr::Duration::INFINITE
@@ -690,15 +736,197 @@ pub fn entry_point() {
         
         //CUSTOM VARIABLES
         let mut spatial_anchors: Vec<(xr::sys::Space, sys::UuidEXT)> = Vec::new();
-        let mut last_anchor_place_time = Instant::now();
-        let host_address = "172.16.4.120:8002";
+        //let host_address = "172.16.4.120:8002";
+        let host_address = "192.168.0.110:8002";
         let socket = UdpSocket::bind(host_address).expect("Couldn't bind to address");
-        let target_address = "172.16.4.126:8002".parse::<SocketAddrV4>().expect("Couldn't parse target address");
+        //let target_address = "172.16.4.126:8002".parse::<SocketAddrV4>().expect("Couldn't parse target address");
+        let target_address = "192.168.0.232:8002".parse::<SocketAddrV4>().expect("Couldn't parse target address");
 
         //Make the socket non-blocking
         socket.set_nonblocking(true).expect("Couldn't set non-blocking");
 
         'render_loop: loop {
+
+            // Poll for OSC messages
+            let osc_packets = poll_osc_messages(&socket);
+
+            // Check address and do something with the message
+            for packet in osc_packets {
+                match packet {
+                    OscPacket::Message(msg) => {
+                        if msg.addr == "/place_anchor" {
+                            let view = xr_session.locate_views(
+                                ViewConfigurationType::PRIMARY_STEREO, to_xr_time(Duration::from_nanos(xr_instance.now().unwrap().as_nanos() as _)), &interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::STAGE))
+                                .unwrap().1[0];
+
+                            let anchor_position = xr::Vector3f {
+                                x: view.pose.position.x,
+                                y: view.pose.position.y,
+                                z: view.pose.position.z,
+                            };
+
+                            let anchor_orientation = xr::Quaternionf {
+                                x: view.pose.orientation.x,
+                                y: view.pose.orientation.y,
+                                z: view.pose.orientation.z,
+                                w: view.pose.orientation.w,
+                            };
+
+                            let result = create_spatial_anchor(&xr_instance, &xr_session, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::STAGE).as_raw(), anchor_position, anchor_orientation, to_xr_time(Duration::from_nanos(xr_instance.now().unwrap().as_nanos() as _)));
+                            match result {
+                                Ok(anchor) => {
+                                    spatial_anchors.push(anchor);
+                                    println!("Spatial anchor created successfully");
+
+                                    // Send the spatial anchor id and position to the host
+                                    let mut args = Vec::new();
+
+                                // Convert anchor id to string
+                                let mut uuid_str = String::new();
+
+                                for byte in anchor.1.data.iter() {
+                                    uuid_str.push_str(&format!("{:02x}", byte));
+                                }
+
+                                    args.push(OscType::String(uuid_str));
+                                    args.push(OscType::Float(anchor_position.x));
+                                    args.push(OscType::Float(anchor_position.y));
+                                    args.push(OscType::Float(anchor_position.z));
+                                    args.push(OscType::Float(anchor_orientation.x));
+                                    args.push(OscType::Float(anchor_orientation.y));
+                                    args.push(OscType::Float(anchor_orientation.z));
+                                    args.push(OscType::Float(anchor_orientation.w));
+
+                                    let msg = OscMessage {
+                                        addr: "/anchor_placed".to_string(),
+                                        args,
+                                    };
+                                    let packet = OscPacket::Message(msg);
+                                    send_osc_message(&socket, &packet, target_address);
+
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to create spatial anchor: {:?}", e);
+                                }
+                            }  
+                        }
+                        if msg.addr == "/load_anchors" {
+
+                            spatial_anchors.clear();
+                            let mut uuids = Vec::new();
+                            for arg in msg.args {
+                                if let OscType::String(uuid) = arg {
+                                    //Convert the string to a uuidext
+                                    println!("Received anchor id: {:?}", uuid);
+                                    let mut uuid_bytes = [0; sys::UUID_SIZE_EXT];
+                                    let uuid = Uuid::parse_str(&uuid).unwrap();
+                                    uuid_bytes.copy_from_slice(uuid.as_bytes());
+                                    uuids.push(sys::UuidEXT {
+                                        data: uuid_bytes
+                                    });
+                                }
+                            }
+
+                            let result = query_spatial_anchors(&xr_instance, &xr_session, &uuids);
+
+                            match result {
+                                Ok(anchors) => {
+                                    spatial_anchors = anchors;
+
+                                    // Locate the spatial anchors
+                                    let poses = spatial_anchors.iter().map(|(anchor_space, _)| {
+                                        locate_spatial_anchors(&xr_instance, *anchor_space, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::STAGE).as_raw(), to_xr_time(Duration::from_nanos(xr_instance.now().unwrap().as_nanos() as _)))
+                                    });
+
+                                    let mut args = Vec::new();
+                                    for (i, pose_result) in poses.enumerate() {
+                                        match pose_result {
+                                            Ok(pose) => {
+
+                                            // Convert anchor id to string
+                                            let mut uuid_str = String::new();
+
+                                            for byte in spatial_anchors[i].1.data.iter() {
+                                                uuid_str.push_str(&format!("{:02x}", byte));
+                                            }
+
+                                            args.push(OscType::String(uuid_str));
+                                            args.push(OscType::Float(pose.position.x));
+                                            args.push(OscType::Float(pose.position.y));
+                                            args.push(OscType::Float(pose.position.z));
+                                            args.push(OscType::Float(pose.orientation.x));
+                                            args.push(OscType::Float(pose.orientation.y));
+                                            args.push(OscType::Float(pose.orientation.z));
+                                            args.push(OscType::Float(pose.orientation.w));
+                                            }
+                                            Err(e) => {
+                                            eprintln!("Failed to locate spatial anchor {}: {:?}", i, e);
+                                            }
+                                        }
+                                    }
+
+                                    if !args.is_empty() {
+                                        let msg = OscMessage {
+                                            addr: "/anchors_loaded".to_string(),
+                                            args,
+                                        };
+                                        
+                                        send_osc_message(&socket, &OscPacket::Message(msg), target_address);
+                                    }
+
+                                    println!("Spatial anchors queried successfully");
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to query spatial anchors: {:?}", e);
+                                }
+                            }  
+                        }
+                    }
+                    OscPacket::Bundle(osc_bundle) => todo!(),
+                }
+            }     
+
+            // Locate the spatial anchors every 1 second
+
+            let poses = spatial_anchors.iter().map(|(anchor_space, _)| {
+                locate_spatial_anchors(&xr_instance, *anchor_space, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::STAGE).as_raw(), to_xr_time(Duration::from_nanos(xr_instance.now().unwrap().as_nanos() as _)))
+            });
+
+            let mut args = Vec::new();
+            for (i, pose_result) in poses.enumerate() {
+            match pose_result {
+                Ok(pose) => {
+
+                // Convert anchor id to string
+                let mut uuid_str = String::new();
+
+                for byte in spatial_anchors[i].1.data.iter() {
+                    uuid_str.push_str(&format!("{:02x}", byte));
+                }
+
+                args.push(OscType::String(uuid_str));
+                args.push(OscType::Float(pose.position.x));
+                args.push(OscType::Float(pose.position.y));
+                args.push(OscType::Float(pose.position.z));
+                args.push(OscType::Float(pose.orientation.x));
+                args.push(OscType::Float(pose.orientation.y));
+                args.push(OscType::Float(pose.orientation.z));
+                args.push(OscType::Float(pose.orientation.w));
+                }
+                Err(e) => {
+                eprintln!("Failed to locate spatial anchor {}: {:?}", i, e);
+                }
+            }
+            }
+
+            if !args.is_empty() {
+                let msg = OscMessage {
+                    addr: "/anchor_locations".to_string(),
+                    args,
+                };
+                send_osc_message(&socket, &OscPacket::Message(msg), target_address);
+            } 
+
             while let Some(event) = xr_instance.poll_event(&mut event_storage).unwrap() {
                 match event {
                     xr::Event::EventsLost(event) => {
@@ -724,20 +952,6 @@ pub fn entry_point() {
                         }
                         xr::SessionState::EXITING => break 'render_loop,
                         xr::SessionState::LOSS_PENDING => break 'render_loop,
-                        xr::SessionState::FOCUSED => {
-
-                            let result = query_spatial_anchors(&xr_instance, &xr_session);
-
-                            match result {
-                                Ok(anchors) => {
-                                    spatial_anchors = anchors;
-                                    println!("Spatial anchors queried successfully");
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to query spatial anchors: {:?}", e);
-                                }
-                            }  
-                        }
                         _ => (),
                     },
                     xr::Event::ReferenceSpaceChangePending(event) => {
@@ -913,105 +1127,7 @@ pub fn entry_point() {
                     )
                     .unwrap();
             }
-
-            // Place an anchor every 10 seconds
-            let mut buf = [0; 1024];
-            if let Ok((amt, _src)) = socket.recv_from(&mut buf) {
-              // If path is place_anchor
-                if let Ok((_, packet)) = decoder::decode_udp(&buf[..amt]) {
-                    if let OscPacket::Message(msg) = packet {
-                        if msg.addr == "/place_anchor" {
-                            let view = xr_session.locate_views(
-                                ViewConfigurationType::PRIMARY_STEREO, to_xr_time(display_time), &interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL))
-                                .unwrap().1[0];
-
-                            let anchor_position = xr::Vector3f {
-                                x: view.pose.position.x,
-                                y: view.pose.position.y,
-                                z: view.pose.position.z,
-                            };
-
-                            let anchor_orientation = xr::Quaternionf {
-                                x: view.pose.orientation.x,
-                                y: view.pose.orientation.y,
-                                z: view.pose.orientation.z,
-                                w: view.pose.orientation.w,
-                            };
-
-                            let result = create_spatial_anchor(&xr_instance, &xr_session, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL).as_raw(), anchor_position, anchor_orientation, to_xr_time(display_time));
-                            match result {
-                                Ok(anchor) => {
-                                    spatial_anchors.push(anchor);
-                                    println!("Spatial anchor created successfully");
-
-                                    // Send the spatial anchor id and position to the host
-                                    let mut args = Vec::new();
-                                    args.push(OscType::Int(anchor.1.data[0] as i32));
-                                    args.push(OscType::Float(anchor_position.x));
-                                    args.push(OscType::Float(anchor_position.y));
-                                    args.push(OscType::Float(anchor_position.z));
-                                    args.push(OscType::Float(anchor_orientation.x));
-                                    args.push(OscType::Float(anchor_orientation.y));
-                                    args.push(OscType::Float(anchor_orientation.z));
-                                    args.push(OscType::Float(anchor_orientation.w));
-
-                                    let msg = OscMessage {
-                                        addr: "/anchor_placed".to_string(),
-                                        args,
-                                    };
-                                    let packet = OscPacket::Message(msg);
-                                    let encoded_msg = encoder::encode(&packet).unwrap();
-                                    socket.send_to(&encoded_msg, target_address).expect("Couldn't send data");
-
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to create spatial anchor: {:?}", e);
-                                }
-                            }  
-                        }
-                        
-                    }
-            
-                }
-            }
-            
-
-            // Locate the spatial anchors every 1 second
-
-            let poses = spatial_anchors.iter().map(|(anchor_space, _)| {
-                locate_spatial_anchors(&xr_instance, *anchor_space, interaction::get_reference_space(&xr_session, xr::ReferenceSpaceType::LOCAL).as_raw(), to_xr_time(display_time))
-            });
-
-            let mut args = Vec::new();
-            for (i, pose_result) in poses.enumerate() {
-            match pose_result {
-                Ok(pose) => {
-                args.push(OscType::Int(spatial_anchors[i].1.data[0] as i32));
-                args.push(OscType::Float(pose.position.x));
-                args.push(OscType::Float(pose.position.y));
-                args.push(OscType::Float(pose.position.z));
-                args.push(OscType::Float(pose.orientation.x));
-                args.push(OscType::Float(pose.orientation.y));
-                args.push(OscType::Float(pose.orientation.z));
-                args.push(OscType::Float(pose.orientation.w));
-                }
-                Err(e) => {
-                eprintln!("Failed to locate spatial anchor {}: {:?}", i, e);
-                }
-            }
-            }
-
-            if !args.is_empty() {
-            let msg = OscMessage {
-                addr: "/spatial_anchors".to_string(),
-                args,
-            };
-            let packet = OscPacket::Message(msg);
-            let encoded_msg = encoder::encode(&packet).unwrap();
-            socket.send_to(&encoded_msg, target_address).expect("Couldn't send data");
-            }
         }
-
     }
 
     // grapics_context is dropped here

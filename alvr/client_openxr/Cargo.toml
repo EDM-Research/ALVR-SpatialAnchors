@@ -9,12 +9,22 @@ license.workspace = true
 [lib]
 crate_type = ["cdylib"]
 
+[dependencies.uuid]
+version = "1.11.0"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]
+
 [dependencies]
 alvr_common.workspace = true
 alvr_client_core.workspace = true
 alvr_packets.workspace = true
 alvr_session.workspace = true
 rosc = "~0.10"
+
+
 
 openxr = { git = "https://github.com/Ralith/openxrs", rev = "9270509d23dc774b43a8b7289e8adf69fcac6828" }
 
