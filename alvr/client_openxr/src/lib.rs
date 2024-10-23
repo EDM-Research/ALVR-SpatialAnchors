@@ -125,6 +125,8 @@ fn default_view() -> xr::View {
     }
 }
 
+//////////////////////////////// BEGIN CUSTOM CODE ////////////////////////////////
+
 fn poll_osc_messages(socket: &UdpSocket) -> Vec<OscPacket> {
     let mut buf = [0; 1024];
     let mut packets = Vec::new();
@@ -567,6 +569,8 @@ fn locate_spatial_anchors(
     } 
 }
 
+//////////////////////////////// END CUSTOM CODE ////////////////////////////////
+
 pub fn entry_point() {
     alvr_client_core::init_logging();
 
@@ -733,6 +737,8 @@ pub fn entry_point() {
         let mut stream_context = None::<StreamContext>;
 
         let mut event_storage = xr::EventDataBuffer::new();
+
+        //////////////////////////////// BEGIN CUSTOM CODE ////////////////////////////////
         
         //CUSTOM VARIABLES
         let mut spatial_anchors: Vec<(xr::sys::Space, sys::UuidEXT)> = Vec::new();
@@ -781,12 +787,12 @@ pub fn entry_point() {
                                     // Send the spatial anchor id and position to the host
                                     let mut args = Vec::new();
 
-                                // Convert anchor id to string
-                                let mut uuid_str = String::new();
+                                    // Convert anchor id to string
+                                    let mut uuid_str = String::new();
 
-                                for byte in anchor.1.data.iter() {
-                                    uuid_str.push_str(&format!("{:02x}", byte));
-                                }
+                                    for byte in anchor.1.data.iter() {
+                                        uuid_str.push_str(&format!("{:02x}", byte));
+                                    }
 
                                     args.push(OscType::String(uuid_str));
                                     args.push(OscType::Float(anchor_position.x));
@@ -813,6 +819,7 @@ pub fn entry_point() {
                         if msg.addr == "/load_anchors" {
 
                             spatial_anchors.clear();
+
                             let mut uuids = Vec::new();
                             for arg in msg.args {
                                 if let OscType::String(uuid) = arg {
@@ -881,6 +888,21 @@ pub fn entry_point() {
                                 }
                             }  
                         }
+
+                        //TODO Remove all anchors from storage
+
+                        if msg.addr == "/reset_anchors" {
+                            spatial_anchors.clear();
+                            
+                            let msg = OscMessage {
+                                addr: "/anchors_reset".to_string(),
+                                args: Vec::new(),
+                            };
+
+                            send_osc_message(&socket, &OscPacket::Message(msg), target_address);
+                        }
+
+
                     }
                     OscPacket::Bundle(osc_bundle) => todo!(),
                 }
@@ -926,6 +948,8 @@ pub fn entry_point() {
                 };
                 send_osc_message(&socket, &OscPacket::Message(msg), target_address);
             } 
+
+            //////////////////////////////// END CUSTOM CODE ////////////////////////////////
 
             while let Some(event) = xr_instance.poll_event(&mut event_storage).unwrap() {
                 match event {
