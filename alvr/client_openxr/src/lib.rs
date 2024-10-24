@@ -34,6 +34,7 @@ use rosc::{OscMessage, OscPacket, OscType};
 use std::net::{SocketAddrV4, UdpSocket};
 
 use uuid::Uuid;
+use local_ip_address::local_ip;
 
 const DECODER_MAX_TIMEOUT_MULTIPLIER: f32 = 0.8;
 
@@ -152,9 +153,10 @@ fn poll_osc_messages(socket: &UdpSocket) -> Vec<OscPacket> {
     packets
 }
 
-fn send_osc_message(socket: &UdpSocket, packet: &OscPacket, target_address: SocketAddrV4) {
+fn send_osc_message(socket: &UdpSocket, packet: &OscPacket, broadcast_address: &str) {
     let encoded_msg = encoder::encode(&packet).unwrap();
-    socket.send_to(&encoded_msg, target_address).expect("Couldn't send data");
+    // Broadcast the message to everyone in the network
+    socket.send_to(&encoded_msg, broadcast_address).expect("Couldn't send message");
 }
 
 fn query_spatial_anchors(
@@ -171,11 +173,11 @@ fn query_spatial_anchors(
         while let Ok(result) = xr_instance.poll_event(&mut event_data) {
             
             if let Some(event) = result {
-                if let xr::Event::SpaceQueryResultsAvailableFB(event) = event {
-                    println!("Spatial anchors query completed successfully");
-                    return Some(1)
-                }
-                else if let xr::Event::SpaceQueryCompleteFB(event) = event {
+                // if let xr::Event::SpaceQueryResultsAvailableFB(event) = event {
+                //     println!("Spatial anchors query completed successfully");
+                //     return Some(1)
+                // }
+                if let xr::Event::SpaceQueryCompleteFB(event) = event {
                     println!("Spatial anchors query completed successfully");
                     return Some(1)
                     
@@ -742,11 +744,13 @@ pub fn entry_point() {
         
         //CUSTOM VARIABLES
         let mut spatial_anchors: Vec<(xr::sys::Space, sys::UuidEXT)> = Vec::new();
-        //let host_address = "172.16.4.120:8002";
-        let host_address = "192.168.0.110:8002";
+        // Automatically get host address
+        let host_address = format!("{}:8002", local_ip().unwrap());
+        // Broadcast address is the same as the host address but with the last number as 255
+        let broadcast_address = format!("{}:8002", host_address.split('.').take(3).collect::<Vec<&str>>().join(".") + ".255");
+        println!("Host address: {}", host_address);
         let socket = UdpSocket::bind(host_address).expect("Couldn't bind to address");
-        //let target_address = "172.16.4.126:8002".parse::<SocketAddrV4>().expect("Couldn't parse target address");
-        let target_address = "192.168.0.232:8002".parse::<SocketAddrV4>().expect("Couldn't parse target address");
+        socket.set_broadcast(true);
 
         //Make the socket non-blocking
         socket.set_nonblocking(true).expect("Couldn't set non-blocking");
@@ -808,7 +812,7 @@ pub fn entry_point() {
                                         args,
                                     };
                                     let packet = OscPacket::Message(msg);
-                                    send_osc_message(&socket, &packet, target_address);
+                                    send_osc_message(&socket, &packet, &broadcast_address);
 
                                 }
                                 Err(e) => {
@@ -878,7 +882,7 @@ pub fn entry_point() {
                                             args,
                                         };
                                         
-                                        send_osc_message(&socket, &OscPacket::Message(msg), target_address);
+                                        send_osc_message(&socket, &OscPacket::Message(msg), &broadcast_address);
                                     }
 
                                     println!("Spatial anchors queried successfully");
@@ -899,7 +903,7 @@ pub fn entry_point() {
                                 args: Vec::new(),
                             };
 
-                            send_osc_message(&socket, &OscPacket::Message(msg), target_address);
+                            send_osc_message(&socket, &OscPacket::Message(msg), &broadcast_address);
                         }
 
 
@@ -946,7 +950,7 @@ pub fn entry_point() {
                     addr: "/anchor_locations".to_string(),
                     args,
                 };
-                send_osc_message(&socket, &OscPacket::Message(msg), target_address);
+                send_osc_message(&socket, &OscPacket::Message(msg), &broadcast_address);
             } 
 
             //////////////////////////////// END CUSTOM CODE ////////////////////////////////
