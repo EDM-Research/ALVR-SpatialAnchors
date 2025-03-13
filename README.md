@@ -1,9 +1,27 @@
-<p align="center"> <img width="500" src="resources/alvr_combined_logo_hq.png"/> </p>
 
-# ALVR - Air Light VR
+# ALVR - Spatial Anchors
 
-[![badge-discord][]][link-discord] [![badge-matrix][]][link-matrix] [![badge-opencollective][]][link-opencollective]
+This is a fork of ALVR - Air Light VR, supporting Spatial Anchors
 
+## About
+![](/img/edm_logo.png) &nbsp;&nbsp;&nbsp;
+![](/img/Max-R_Logo.png)
+
+ALVR-SpatialAnchors is a development by [Hasselt University](https://www.uhasselt.be/), [Expertise Centre for Digital Media](https://www.uhasselt.be/en/instituten-en/expertise-centre-for-digital-media) in the scope of the EU funded Projects [MAX-R](https://max-r.eu/) (101070072) and funds on behalf of Hasselt University.
+
+## Funding
+
+![Funded by EU](/img/EN_Co-fundedbytheEU_RGB_POS.png)
+
+This project has received funding from the European Union's Horizon Europe Research and Innovation Programme under Grant Agreement No 101070072 MAX-R.
+
+
+## License
+ALVR-SpatialAnchors is a open-sorce development by Hasselt University Expertise Centre for Digital Media  
+The client is licensed under [MIT](LICENSE). See [License file](LICENSE) for more details.
+
+
+# Other ALVR - Documentation
 Stream VR games from your PC to your headset via Wi-Fi.  
 This is a fork of [ALVR](https://github.com/polygraphene/ALVR).
 
