@@ -9,6 +9,17 @@ This is a fork of ALVR - Air Light VR, supporting Spatial Anchors
 
 ALVR-SpatialAnchors is a development by [Hasselt University](https://www.uhasselt.be/), [Expertise Centre for Digital Media](https://www.uhasselt.be/en/instituten-en/expertise-centre-for-digital-media) in the scope of the EU funded Projects [MAX-R](https://max-r.eu/) (101070072) and funds on behalf of Hasselt University.
 
+
+## Examples Videos
+
+### Approach
+[![Large Area Spatially Aligned Anchors](https://img.youtube.com/vi/2xleN8whWSI/0.jpg)](https://www.youtube.com/watch?v=2xleN8whWSI)
+
+### On-site Visualizing of Building Information Models (BIM)
+[![Large Area AR for BIM visualisations and interactions](https://img.youtube.com/vi/CEKtPZjClpc/0.jpg)](https://www.youtube.com/watch?v=CEKtPZjClpc)
+
+
+
 ## Funding
 
 ![Funded by EU](/img/EN_Co-fundedbytheEU_RGB_POS.png)
